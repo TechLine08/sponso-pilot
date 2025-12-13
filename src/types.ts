@@ -12,3 +12,20 @@ export type SendLog = {
   message: string;          // provider id or error text
   timestamp: string;        // ISO
 };
+
+export type User = {
+  id: string;
+  email: string;
+  name: string;
+  emailVerified: boolean;
+  createdAt: string;
+};
+
+export type Session = {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    emailVerified: boolean;
+  };
+};

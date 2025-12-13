@@ -12,7 +12,7 @@ import Link from "next/link";
 
 type Tab = "campaign" | "research";
 
-export default function HomePage() {
+export default function DashboardPage() {
   const [tab, setTab] = useState<Tab>("campaign");
 
   return (
@@ -113,11 +113,7 @@ function ResearchAssistant() {
       const res = await fetch("/api/extract-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          domains,
-          includeLinkedIn: false, // LinkedIn requires API keys, disabled for now
-          strictDomainMatch: true, // Only show emails matching the company's domain
-        }),
+        body: JSON.stringify({ domains }),
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "Failed");
@@ -213,7 +209,7 @@ function ResearchAssistant() {
       <div className="rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
         <h2 className="text-lg font-semibold">Research</h2>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300/80">
-          Use search engines to find relevant companies, paste their domains, and extract public emails. The tool searches the homepage and common contact pages (contact, about, team, etc.).
+          Use search engines to find relevant companies, paste their domains, and extract public emails.
         </p>
 
         <div className="mt-5">
@@ -742,13 +738,9 @@ function LogsBlock({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-white/10">
-            {logs.map((log, idx) => {
-              // Format date consistently to avoid hydration mismatch
-              const date = new Date(log.timestamp);
-              const formattedDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-              return (
+            {logs.map((log, idx) => (
               <tr key={idx} className="bg-white/70 dark:bg-white/5">
-                <td className="whitespace-nowrap p-3">{formattedDate}</td>
+                <td className="whitespace-nowrap p-3">{new Date(log.timestamp).toLocaleString()}</td>
                 <td className="p-3">{log.company.name}</td>
                 <td className="p-3">{log.company.email}</td>
                 <td className="p-3">
@@ -765,8 +757,7 @@ function LogsBlock({
                 </td>
                 <td className="p-3">{log.message}</td>
               </tr>
-              );
-            })}
+            ))}
             {logs.length === 0 && (
               <tr>
                 <td className="p-6 text-center text-slate-500 dark:text-slate-400" colSpan={5}>
@@ -817,3 +808,5 @@ function safeOrigin(input: string) {
     return input;
   }
 }
+
+

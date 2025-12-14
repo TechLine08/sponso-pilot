@@ -419,15 +419,22 @@ Your Org`
 
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [logs, setLogs] = useState<SendLog[]>(() => {
-    if (typeof window === "undefined") return [];
+  const [logs, setLogs] = useState<SendLog[]>([]);
+  
+  // Load logs from localStorage after component mounts (client-side only)
+  useEffect(() => {
     try {
       const saved = localStorage.getItem("sponso_logs");
-      return saved ? (JSON.parse(saved) as SendLog[]) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved) as SendLog[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setLogs(parsed);
+        }
+      }
     } catch {
-      return [];
+      // Ignore localStorage errors
     }
-  });
+  }, []);
 
   const toast = useToast();
 

@@ -744,27 +744,34 @@ function LogsBlock({
           <tbody className="divide-y divide-slate-200 dark:divide-white/10">
             {logs.map((log, idx) => {
               // Format date consistently to avoid hydration mismatch
-              const date = new Date(log.timestamp);
-              const formattedDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+              let formattedDate = "";
+              try {
+                const date = new Date(log.timestamp);
+                if (!isNaN(date.getTime())) {
+                  formattedDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+                } else {
+                  formattedDate = log.timestamp || "";
+                }
+              } catch {
+                formattedDate = log.timestamp || "";
+              }
+              
+              const statusClassName = log.status === "success"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+                : "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200";
+              
               return (
-              <tr key={idx} className="bg-white/70 dark:bg-white/5">
-                <td className="whitespace-nowrap p-3">{formattedDate}</td>
-                <td className="p-3">{log.company.name}</td>
-                <td className="p-3">{log.company.email}</td>
-                <td className="p-3">
-                  <span
-                    className={[
-                      "rounded-md px-2 py-0.5 text-xs",
-                      log.status === "success"
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
-                        : "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200",
-                    ].join(" ")}
-                  >
-                    {log.status}
-                  </span>
-                </td>
-                <td className="p-3">{log.message}</td>
-              </tr>
+                <tr key={idx} className="bg-white/70 dark:bg-white/5">
+                  <td className="whitespace-nowrap p-3">{formattedDate}</td>
+                  <td className="p-3">{log.company?.name || ""}</td>
+                  <td className="p-3">{log.company?.email || ""}</td>
+                  <td className="p-3">
+                    <span className={`rounded-md px-2 py-0.5 text-xs ${statusClassName}`}>
+                      {log.status || "unknown"}
+                    </span>
+                  </td>
+                  <td className="p-3">{log.message || ""}</td>
+                </tr>
               );
             })}
             {logs.length === 0 && (

@@ -163,19 +163,16 @@ function deobfuscate(raw: string) {
   return s;
 }
 
-function extractEmailsFromHtml(html: string, companyHost?: string) {
+function extractEmailsFromHtml(html: string) {
   const emails = new Set<string>();
 
-  // 1) mailto: links (highest priority) - be more permissive
+  // 1) mailto: links (highest priority)
   for (const m of html.matchAll(/mailto:([^"' >?&]+)/gi)) {
     try {
       const decoded = decodeURIComponent(m[1]);
       const cleaned = deobfuscate(decoded).toLowerCase().trim();
-      if (cleaned && EMAIL_REGEX.test(cleaned) && !isThirdPartyEmail(cleaned)) {
-        // If we have company host, prioritize domain matches
-        if (!companyHost || sameOrgDomain(cleaned, companyHost)) {
-          emails.add(cleaned);
-        }
+      if (cleaned && EMAIL_REGEX.test(cleaned)) {
+        emails.add(cleaned);
       }
     } catch {
       // Skip invalid mailto links
@@ -185,10 +182,8 @@ function extractEmailsFromHtml(html: string, companyHost?: string) {
   // 2) data-email, email attributes, and other data attributes
   for (const m of html.matchAll(/(?:data-)?(?:email|contact-email|support-email)=["']([^"']+)["']/gi)) {
     const cleaned = deobfuscate(m[1]).toLowerCase().trim();
-    if (cleaned && EMAIL_REGEX.test(cleaned) && !isThirdPartyEmail(cleaned)) {
-      if (!companyHost || sameOrgDomain(cleaned, companyHost)) {
-        emails.add(cleaned);
-      }
+    if (cleaned && EMAIL_REGEX.test(cleaned)) {
+      emails.add(cleaned);
     }
   }
 
@@ -196,28 +191,29 @@ function extractEmailsFromHtml(html: string, companyHost?: string) {
   // Only in visible text content, not in scripts
   for (const m of html.matchAll(/(?:email|e-mail|contact|reach|write|send)[\s:]+(?:us|to)?[\s:]*([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/gi)) {
     const cleaned = deobfuscate(m[1]).toLowerCase().trim();
-    if (cleaned && EMAIL_REGEX.test(cleaned) && !isThirdPartyEmail(cleaned)) {
-      if (!companyHost || sameOrgDomain(cleaned, companyHost)) {
-        emails.add(cleaned);
-      }
+    if (cleaned && EMAIL_REGEX.test(cleaned)) {
+      emails.add(cleaned);
     }
   }
 
   // 4) Visible strings (including obfuscated) - look in text content areas
   // Remove script and style tags first to avoid third-party service emails
-  const cleanedHtml = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+  // But keep the content to extract emails from visible text
+  const cleanedHtml = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, ''); // Remove iframes too
+  
   const deob = deobfuscate(cleanedHtml);
   const found = deob.match(EMAIL_REGEX);
   if (found) {
     found.forEach((e) => {
       const cleaned = e.toLowerCase().trim();
-      if (cleaned && EMAIL_REGEX.test(cleaned) && !isThirdPartyEmail(cleaned)) {
-        // Only add if it matches the company domain
-        if (companyHost && sameOrgDomain(cleaned, companyHost)) {
-          emails.add(cleaned);
-        }
+      // Remove any trailing punctuation that might have been captured
+      const finalEmail = cleaned.replace(/[.,;:!?)\]]+$/, '');
+      if (finalEmail && EMAIL_REGEX.test(finalEmail)) {
+        emails.add(finalEmail);
       }
     });
   }
@@ -258,20 +254,53 @@ function brandToken(host: string) {
   return host.replace(/^www\./, "").split(".")[0].toLowerCase(); // e.g. hyrox from hyroxsingapore.com
 }
 function sameOrgDomain(email: string, host: string) {
-  const cleanHost = host.replace(/^www\./, "").toLowerCase();
-  const emailDomain = email.split("@").pop()?.toLowerCase() || "";
+  if (!email || !host) return false;
   
-  // Exact match
+  const cleanHost = host.replace(/^www\./, "").toLowerCase().trim();
+  const emailDomain = email.split("@").pop()?.toLowerCase().trim() || "";
+  
+  if (!emailDomain || !cleanHost) return false;
+  
+  // Exact match (e.g., contact@company.com for company.com)
   if (emailDomain === cleanHost) return true;
   
-  // Common mail subdomains
-  const mailSubdomains = ["mail", "email", "contact", "info", "hello", "support", "sales"];
+  // Common mail subdomains (e.g., mail.company.com, contact.company.com)
+  const mailSubdomains = [
+    "mail", "email", "contact", "info", "hello", "hi", "support", "sales", 
+    "business", "partnership", "sponsor", "sponsorship", "partners",
+    "press", "media", "marketing", "team", "hr", "careers", "jobs"
+  ];
   for (const sub of mailSubdomains) {
     if (emailDomain === `${sub}.${cleanHost}`) return true;
   }
   
   // Check if it's a subdomain of the main domain (e.g., company.com and mail.company.com)
   if (emailDomain.endsWith(`.${cleanHost}`)) return true;
+  
+  // Handle multi-part TLDs (e.g., company.co.uk, company.com.au)
+  // Extract the main domain part (e.g., "company" from "company.co.uk")
+  const hostParts = cleanHost.split(".");
+  if (hostParts.length >= 2) {
+    const mainDomain = hostParts[0]; // e.g., "company"
+    const tld = hostParts.slice(1).join("."); // e.g., "co.uk" or "com"
+    
+    // Check if email domain matches: mainDomain.tld or subdomain.mainDomain.tld
+    const emailParts = emailDomain.split(".");
+    if (emailParts.length >= 2) {
+      const emailTld = emailParts.slice(-hostParts.length + 1).join("."); // e.g., "co.uk"
+      const emailMain = emailParts[0]; // e.g., "contact" or "company"
+      
+      // Match like contact@company.co.uk for company.co.uk
+      if (emailTld === tld && emailParts.includes(mainDomain)) {
+        return true;
+      }
+      
+      // Match like contact@mail.company.co.uk for company.co.uk
+      if (emailTld === tld && emailDomain.includes(`.${mainDomain}.`)) {
+        return true;
+      }
+    }
+  }
   
   return false;
 }
@@ -315,14 +344,21 @@ function rankAndFilterEmails(emails: string[], host: string, strictDomainMatch: 
   if (unique.length === 0) return [];
   
   // Filter to only domain-matching emails (strict by default)
-  const domainMatches = unique.filter((e) => sameOrgDomain(e, host));
+  const domainMatches = unique.filter((e) => {
+    const matches = sameOrgDomain(e, host);
+    return matches;
+  });
   
+  // If we have domain matches, return them sorted by preference
   if (domainMatches.length > 0) {
-    // Sort domain matches by business email preference
     return domainMatches.sort((a, b) => {
-      const aScore = isBusinessEmail(a) ? 1 : 0;
-      const bScore = isBusinessEmail(b) ? 1 : 0;
-      return bScore - aScore;
+      // Prefer business emails (contact, info, hello, etc.)
+      const aIsBusiness = isBusinessEmail(a);
+      const bIsBusiness = isBusinessEmail(b);
+      if (aIsBusiness && !bIsBusiness) return -1;
+      if (!aIsBusiness && bIsBusiness) return 1;
+      // If both are business or both aren't, sort alphabetically
+      return a.localeCompare(b);
     });
   }
   
@@ -374,7 +410,18 @@ async function searchLinkedIn(companyName: string, domain: string) {
 
 export async function POST(req: Request) {
   try {
-    const { domains, includeLinkedIn, strictDomainMatch = true } = await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch (jsonError) {
+      return NextResponse.json(
+        { ok: false, error: "Invalid JSON in request body" },
+        { status: 400 }
+      );
+    }
+    
+    const { domains, includeLinkedIn, strictDomainMatch = true } = body || {};
+    
     if (!Array.isArray(domains) || domains.length === 0) {
       return NextResponse.json(
         { ok: false, error: "No domains provided." },
@@ -389,7 +436,7 @@ export async function POST(req: Request) {
     }> = [];
 
     const queue = [...domains];
-    const CONCURRENCY = 4; // Reduced for better reliability
+    const CONCURRENCY = Math.min(2, domains.length); // Reduced for better reliability and to avoid rate limiting
 
     async function processOne(raw: string) {
       const origin = normaliseOrigin(raw);
@@ -400,14 +447,29 @@ export async function POST(req: Request) {
 
       try {
         // 1) fetch homepage
-        const res = await fetch(origin, {
-          headers: {
-            "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          },
-          redirect: "follow",
-          signal: AbortSignal.timeout(15000), // 15s timeout
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, 15000);
+        
+        let res: Response;
+        try {
+          res = await fetch(origin, {
+            headers: {
+              "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
+              "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            redirect: "follow",
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            throw new Error('Request timeout');
+          }
+          throw fetchError;
+        }
         
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
@@ -427,7 +489,7 @@ export async function POST(req: Request) {
         // Get the host for domain matching
         const host = new URL(finalOrigin).hostname;
 
-        const homepageEmails = extractEmailsFromHtml(html, host).map((e) => ({
+        const homepageEmails = extractEmailsFromHtml(html).map((e) => ({
           email: e,
           source: finalOrigin,
         }));
@@ -437,27 +499,47 @@ export async function POST(req: Request) {
         const subEmails: { email: string; source: string }[] = [];
         for (const url of links) {
           try {
-            const r = await fetch(url, {
-              headers: {
-                "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              },
-              redirect: "follow",
-              signal: AbortSignal.timeout(10000), // 10s timeout per page
-            });
+            const subController = new AbortController();
+            const subTimeoutId = setTimeout(() => {
+              subController.abort();
+            }, 10000);
+            
+            let r: Response;
+            try {
+              r = await fetch(url, {
+                headers: {
+                  "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
+                  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+                redirect: "follow",
+                signal: subController.signal,
+              });
+              clearTimeout(subTimeoutId);
+            } catch (fetchError: any) {
+              clearTimeout(subTimeoutId);
+              if (fetchError.name === 'AbortError') {
+                continue; // Skip timeout errors
+              }
+              continue; // Skip other fetch errors
+            }
+            
             if (r.ok) {
-              const h = await r.text();
-              // Get host for domain matching
-              const host = new URL(finalOrigin).hostname;
-              const found = extractEmailsFromHtml(h, host).map((e) => ({
-                email: e,
-                source: url,
-              }));
-              subEmails.push(...found);
+              try {
+                const h = await r.text();
+                const found = extractEmailsFromHtml(h).map((e) => ({
+                  email: e,
+                  source: url,
+                }));
+                subEmails.push(...found);
+              } catch (textError) {
+                // Skip if we can't read the text
+                continue;
+              }
             }
             await new Promise((r) => setTimeout(r, 300)); // polite pause
-          } catch {
+          } catch (subError) {
             // ignore subpage errors
+            continue;
           }
         }
 
@@ -468,9 +550,9 @@ export async function POST(req: Request) {
         }
 
         const all = [...homepageEmails, ...subEmails, ...linkedInEmails];
-
+        
         // Filter + rank using final host (prioritize domain-matching emails)
-        const host = new URL(finalOrigin).hostname;
+        // host is already defined above at line 464
         const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
 
         // Re-map to include first-seen source for each email
@@ -483,30 +565,44 @@ export async function POST(req: Request) {
           withSource.push({ email: e, source: src });
         }
 
-        // Only include results if we found at least one email (or if we want to show empty results)
+        // Always include results, even if empty (so user knows the search completed)
         results.push({
           domain: finalOrigin,
           companyName,
           contacts: withSource,
         });
-      } catch {
+      } catch (err: any) {
+        // Log error for debugging but don't fail the entire request
+        console.error(`Error processing ${origin}:`, err?.message || err);
         results.push({ domain: origin, contacts: [] });
       }
     }
 
     async function worker() {
-      while (queue.length) {
-        const d = queue.shift()!;
-        await processOne(d);
+      while (queue.length > 0) {
+        const d = queue.shift();
+        if (d) {
+          try {
+            await processOne(d);
+          } catch (workerError: any) {
+            console.error("Worker error processing domain:", workerError?.message || workerError);
+            // Continue processing other domains
+          }
+        }
       }
     }
 
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, domains.length) }, worker)
-    );
+    // Process domains with limited concurrency
+    const workerCount = Math.min(CONCURRENCY, domains.length);
+    const workers = Array.from({ length: workerCount }, () => worker());
+    await Promise.all(workers).catch((err) => {
+      console.error("Worker pool error:", err);
+      // Continue anyway - some results might be available
+    });
 
     return NextResponse.json({ ok: true, results });
   } catch (e: any) {
+    console.error("Extract email error:", e);
     return NextResponse.json(
       { ok: false, error: e?.message ?? "Unknown error" },
       { status: 500 }

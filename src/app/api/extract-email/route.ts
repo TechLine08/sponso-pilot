@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Basic email regex + we also run a de-obfuscator
-const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?:\.[A-Z]{2,})?/gi;
 
 // Pages we'll try in addition to the homepage (expanded list)
 const HINT_PATHS = [
@@ -12,6 +12,10 @@ const HINT_PATHS = [
   "contacts",
   "contact-us",
   "contactus",
+  "pages/contact-us",
+  "pages/contact",
+  "pages/support",
+  "pages/customer-service",
   "get-in-touch",
   "getintouch",
   "reach-out",
@@ -113,6 +117,20 @@ const THIRD_PARTY_DOMAINS = [
   "123formbuilder.com",
 ];
 
+function makeBrowserHeaders(origin: string) {
+  return {
+    "user-agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "accept":
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "accept-language": "en-AU,en;q=0.9",
+    "cache-control": "no-cache",
+    "pragma": "no-cache",
+    "upgrade-insecure-requests": "1",
+    "referer": origin + "/",
+  };
+}
+
 function isThirdPartyEmail(email: string): boolean {
   const emailDomain = email.split("@").pop()?.toLowerCase() || "";
   return THIRD_PARTY_DOMAINS.some(domain => 
@@ -165,6 +183,9 @@ function deobfuscate(raw: string) {
 
 function extractEmailsFromHtml(html: string) {
   const emails = new Set<string>();
+  const textOnly = html.replace(/<[^>]+>/g, " ");
+  const foundText = textOnly.match(EMAIL_REGEX);
+  if (foundText) foundText.forEach((e) => emails.add(e));
 
   // 1) mailto: links (highest priority)
   for (const m of html.matchAll(/mailto:([^"' >?&]+)/gi)) {
@@ -455,13 +476,13 @@ export async function POST(req: Request) {
         let res: Response;
         try {
           res = await fetch(origin, {
-            headers: {
-              "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-              "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-            redirect: "follow",
-            signal: controller.signal,
-          });
+              headers: {
+                "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              },
+              redirect: "follow",
+              signal: controller.signal,
+              });
           clearTimeout(timeoutId);
         } catch (fetchError: any) {
           clearTimeout(timeoutId);
@@ -507,13 +528,11 @@ export async function POST(req: Request) {
             let r: Response;
             try {
               r = await fetch(url, {
-                headers: {
-                  "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-                  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-                redirect: "follow",
-                signal: subController.signal,
-              });
+                    headers: makeBrowserHeaders(finalOrigin),
+                    redirect: "follow",
+                    signal: subController.signal,
+                  });
+
               clearTimeout(subTimeoutId);
             } catch (fetchError: any) {
               clearTimeout(subTimeoutId);

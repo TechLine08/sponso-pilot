@@ -131,6 +131,16 @@ function makeBrowserHeaders(origin: string) {
   };
 }
 
+function looksTrashy(email: string) {
+  return (
+    email.startsWith("u0") ||               // u003eprivacy@...
+    email.includes("@2x.") ||               // bg-info@2x.png
+    email.includes(".png") ||
+    email.includes(".jpg") ||
+    email.includes(".svg") ||
+    email.includes("your@email.com")
+  );
+}
 
 function isThirdPartyEmail(email: string): boolean {
   const emailDomain = email.split("@").pop()?.toLowerCase() || "";
@@ -359,7 +369,8 @@ function rankAndFilterEmails(emails: string[], host: string, strictDomainMatch: 
     emails.filter((e) => 
       !isBad(e) && 
       isValidEmailFormat(e) && 
-      !isThirdPartyEmail(e)
+      !isThirdPartyEmail(e) &&
+      !looksTrashy(e)
     )
   );
   
@@ -469,70 +480,73 @@ export async function POST(req: Request) {
 
       try {
         // 1) fetch homepage
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 15000);
-        
-        let res: Response;
-        try {
-          res = await fetch(origin, {
-            headers: makeBrowserHeaders(origin),
-            redirect: "follow",
-            signal: controller.signal,
-          });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-          clearTimeout(timeoutId);
+      let res: Response;
 
-          console.log(
-            "[EMAIL EXTRACT]",
-            "URL:", origin,
-            "STATUS:", res.status,
-            "FINAL URL:", res.url
-          );
-        } catch (fetchError: any) {
-          clearTimeout(timeoutId);
-          if (fetchError.name === 'AbortError') {
-            throw new Error('Request timeout');
-          }
-          throw fetchError;
-        }
+      try {
+        res = await fetch(origin, {
+          headers: makeBrowserHeaders(origin),
+          redirect: "follow",
+          signal: controller.signal,
+        });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
 
-        console.log( // For debugging
-          "[EMAIL EXTRACT]",
-          "URL:", origin,
-          "STATUS:", res.status,
-          "FINAL URL:", res.url
-        );
-
-        if (res.status === 403) {
+        if (fetchError?.name === "AbortError") {
           results.push({
             domain: origin,
-            contacts: [],
-            blocked: true,
-            status: 403,
-            note: "Blocked by site (HTTP 403). Manual review required.",
+            companyName: undefined,
+            contacts: [{ email: "", source: origin, note: "timeout" }],
           } as any);
           return;
         }
 
-        if (!res.ok) {
-          results.push({
-            domain: origin,
-            contacts: [],
-            blocked: true,
-            status: res.status,
-            note:
-              res.status === 403
-                ? "manual/forbidden"
-                : "manual/unreachable",
-          } as any);
-          return;
-        }
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "unreachable" }],
+        } as any);
+        return;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
-        const html = await res.text();
-        //For debugging
-        console.log("[EMAIL EXTRACT]", origin, "HTML length:", html.length, "Contains @:", html.includes("@"));
+      console.log(
+        "[EMAIL EXTRACT]",
+        "URL:", origin,
+        "STATUS:", res.status,
+        "FINAL URL:", res.url
+      );
+
+      if (res.status === 403) {
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "forbidden" }],
+        } as any);
+        return;
+      }
+
+      if (!res.ok) {
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "unreachable" }],
+        } as any);
+        return;
+      }
+
+      const html = await res.text();
+      console.log(
+        "[EMAIL EXTRACT]",
+        origin,
+        "HTML length:",
+        html.length,
+        "Contains @:",
+        html.includes("@")
+      );
 
 
         // Record final origin after redirects (important for brand/host logic)
@@ -632,9 +646,24 @@ export async function POST(req: Request) {
         // Filter + rank using final host (prioritize domain-matching emails)
         // host is already defined above at line 464
         const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
+        if (ranked.length === 0) {
+
+          results.push({
+            domain: finalOrigin,
+            companyName,
+            contacts: [
+              {
+                email: "",
+                source: finalOrigin,
+                note: "no email mentioned",
+              },
+            ],
+          } as any);
+          return;
+        }
 
         // Re-map to include first-seen source for each email
-        const withSource: { email: string; source: string }[] = [];
+        const withSource: { email: string; source: string; note?: string }[] = [];
         const seen = new Set<string>();
         for (const e of ranked) {
           if (seen.has(e)) continue;

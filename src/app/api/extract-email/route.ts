@@ -131,6 +131,7 @@ function makeBrowserHeaders(origin: string) {
   };
 }
 
+
 function isThirdPartyEmail(email: string): boolean {
   const emailDomain = email.split("@").pop()?.toLowerCase() || "";
   return THIRD_PARTY_DOMAINS.some(domain => 
@@ -476,14 +477,19 @@ export async function POST(req: Request) {
         let res: Response;
         try {
           res = await fetch(origin, {
-              headers: {
-                "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              },
-              redirect: "follow",
-              signal: controller.signal,
-              });
+            headers: makeBrowserHeaders(origin),
+            redirect: "follow",
+            signal: controller.signal,
+          });
+
           clearTimeout(timeoutId);
+
+          console.log(
+            "[EMAIL EXTRACT]",
+            "URL:", origin,
+            "STATUS:", res.status,
+            "FINAL URL:", res.url
+          );
         } catch (fetchError: any) {
           clearTimeout(timeoutId);
           if (fetchError.name === 'AbortError') {
@@ -491,12 +497,43 @@ export async function POST(req: Request) {
           }
           throw fetchError;
         }
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
+
+        console.log( // For debugging
+          "[EMAIL EXTRACT]",
+          "URL:", origin,
+          "STATUS:", res.status,
+          "FINAL URL:", res.url
+        );
+
+        if (res.status === 403) {
+          results.push({
+            domain: origin,
+            contacts: [],
+            blocked: true,
+            status: 403,
+            note: "Blocked by site (HTTP 403). Manual review required.",
+          } as any);
+          return;
         }
-        
+
+        if (!res.ok) {
+          results.push({
+            domain: origin,
+            contacts: [],
+            blocked: true,
+            status: res.status,
+            note:
+              res.status === 403
+                ? "manual/forbidden"
+                : "manual/unreachable",
+          } as any);
+          return;
+        }
+
         const html = await res.text();
+        //For debugging
+        console.log("[EMAIL EXTRACT]", origin, "HTML length:", html.length, "Contains @:", html.includes("@"));
+
 
         // Record final origin after redirects (important for brand/host logic)
         let finalOrigin = origin;
@@ -569,7 +606,29 @@ export async function POST(req: Request) {
         }
 
         const all = [...homepageEmails, ...subEmails, ...linkedInEmails];
-        
+        // Debuging raw emails
+        const rawEmails = all.map((x) => x.email);
+
+        console.log(
+          "[EMAIL EXTRACT]",
+          origin,
+          "RAW count:",
+          rawEmails.length,
+          "RAW sample:",
+          rawEmails.slice(0, 20)
+        );
+
+        const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
+
+        console.log(
+          "[EMAIL EXTRACT]",
+          origin,
+          "RANKED count:",
+          rankedDebug.length,
+          "RANKED:",
+          rankedDebug
+        );
+
         // Filter + rank using final host (prioritize domain-matching emails)
         // host is already defined above at line 464
         const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);

@@ -314,7 +314,9 @@ function ResearchAssistant() {
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-white/10">
               {rows.map((r) => {
-                const emailValid = isValidEmail(r.email);
+                const isNA = !r.email || r.email.trim() === "";
+                const emailValid = isNA || isValidEmail(r.email);
+
                 return (
                   <tr key={r.id} className="bg-white/70 hover:bg-white dark:bg-white/5 dark:hover:bg-white/10">
                     <td className="p-3 align-top">
@@ -329,16 +331,25 @@ function ResearchAssistant() {
                     </td>
                     <td className="p-3 align-top">
                       <input
-                        value={r.email}
-                        onChange={(e) => updateRow(r.id, { email: e.target.value })}
+                        value={isNA ? "N/A" : r.email}
+                        readOnly={isNA}
+                        onChange={(e) => {
+                          if (isNA) return;
+                          updateRow(r.id, { email: e.target.value });
+                        }}
                         className={[
                           "w-60 rounded-md px-2 py-1",
                           emailValid
                             ? "border border-slate-200 bg-white dark:border-white/10 dark:bg-white/10"
                             : "border border-rose-500/80 bg-rose-50/60 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200",
+                          isNA ? "opacity-60 cursor-not-allowed" : "",
                         ].join(" ")}
                       />
-                      {!emailValid && <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email</div>}
+                      {!emailValid && !isNA && (
+                        <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">
+                          Invalid email
+                        </div>
+                      )}
                     </td>
                     <td className="p-3 align-top">
                       <input

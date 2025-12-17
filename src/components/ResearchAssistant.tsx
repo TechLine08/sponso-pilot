@@ -415,3 +415,4 @@ export default function ResearchAssistant() {
     </div>
   );
 }
+

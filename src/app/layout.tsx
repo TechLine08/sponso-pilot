@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   title: "SponsoPilot – Email Campaign Automation",
   description:
     "Multi-recipient personalized sponsorship outreach built with Next.js, Tailwind, and Resend API.",
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 5,
+  },
 };
 
 export default function RootLayout({

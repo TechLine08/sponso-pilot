@@ -110,11 +110,23 @@ export async function POST(req: Request) {
               html,
             });
             if (error) {
+              // Try to extract a user-friendly error message
+              let errorMessage = normalizeErr(error);
+              try {
+                const parsed = typeof error === 'string' ? JSON.parse(error) : error;
+                if (parsed && typeof parsed === 'object') {
+                  // Prefer message field, then error field, then the whole thing
+                  errorMessage = parsed.message || parsed.error || errorMessage;
+                }
+              } catch {
+                // If parsing fails, use the normalized error as-is
+              }
+              
               logs.push({
                 id: c.email,
                 company: c,
                 status: "fail",
-                message: normalizeErr(error),
+                message: errorMessage,
                 timestamp: new Date().toISOString(),
               });
             } else {

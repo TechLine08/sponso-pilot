@@ -131,6 +131,17 @@ function makeBrowserHeaders(origin: string) {
   };
 }
 
+function looksTrashy(email: string) {
+  return (
+    email.startsWith("u0") ||               // u003eprivacy@...
+    email.includes("@2x.") ||               // bg-info@2x.png
+    email.includes(".png") ||
+    email.includes(".jpg") ||
+    email.includes(".svg") ||
+    email.includes("your@email.com")
+  );
+}
+
 function isThirdPartyEmail(email: string): boolean {
   const emailDomain = email.split("@").pop()?.toLowerCase() || "";
   return THIRD_PARTY_DOMAINS.some(domain => 
@@ -358,7 +369,8 @@ function rankAndFilterEmails(emails: string[], host: string, strictDomainMatch: 
     emails.filter((e) => 
       !isBad(e) && 
       isValidEmailFormat(e) && 
-      !isThirdPartyEmail(e)
+      !isThirdPartyEmail(e) &&
+      !looksTrashy(e)
     )
   );
   
@@ -468,35 +480,74 @@ export async function POST(req: Request) {
 
       try {
         // 1) fetch homepage
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 15000);
-        
-        let res: Response;
-        try {
-          res = await fetch(origin, {
-              headers: {
-                "user-agent": "Mozilla/5.0 (compatible; SponsoPilotEmailFinder/1.2)",
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              },
-              redirect: "follow",
-              signal: controller.signal,
-              });
-          clearTimeout(timeoutId);
-        } catch (fetchError: any) {
-          clearTimeout(timeoutId);
-          if (fetchError.name === 'AbortError') {
-            throw new Error('Request timeout');
-          }
-          throw fetchError;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      let res: Response;
+
+      try {
+        res = await fetch(origin, {
+          headers: makeBrowserHeaders(origin),
+          redirect: "follow",
+          signal: controller.signal,
+        });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+
+        if (fetchError?.name === "AbortError") {
+          results.push({
+            domain: origin,
+            companyName: undefined,
+            contacts: [{ email: "", source: origin, note: "timeout" }],
+          } as any);
+          return;
         }
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        
-        const html = await res.text();
+
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "unreachable" }],
+        } as any);
+        return;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      console.log(
+        "[EMAIL EXTRACT]",
+        "URL:", origin,
+        "STATUS:", res.status,
+        "FINAL URL:", res.url
+      );
+
+      if (res.status === 403) {
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "forbidden" }],
+        } as any);
+        return;
+      }
+
+      if (!res.ok) {
+        results.push({
+          domain: origin,
+          companyName: undefined,
+          contacts: [{ email: "", source: origin, note: "unreachable" }],
+        } as any);
+        return;
+      }
+
+      const html = await res.text();
+      console.log(
+        "[EMAIL EXTRACT]",
+        origin,
+        "HTML length:",
+        html.length,
+        "Contains @:",
+        html.includes("@")
+      );
+
 
         // Record final origin after redirects (important for brand/host logic)
         let finalOrigin = origin;
@@ -569,13 +620,50 @@ export async function POST(req: Request) {
         }
 
         const all = [...homepageEmails, ...subEmails, ...linkedInEmails];
-        
+        // Debuging raw emails
+        const rawEmails = all.map((x) => x.email);
+
+        console.log(
+          "[EMAIL EXTRACT]",
+          origin,
+          "RAW count:",
+          rawEmails.length,
+          "RAW sample:",
+          rawEmails.slice(0, 20)
+        );
+
+        const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
+
+        console.log(
+          "[EMAIL EXTRACT]",
+          origin,
+          "RANKED count:",
+          rankedDebug.length,
+          "RANKED:",
+          rankedDebug
+        );
+
         // Filter + rank using final host (prioritize domain-matching emails)
         // host is already defined above at line 464
         const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
+        if (ranked.length === 0) {
+
+          results.push({
+            domain: finalOrigin,
+            companyName,
+            contacts: [
+              {
+                email: "",
+                source: finalOrigin,
+                note: "no email mentioned",
+              },
+            ],
+          } as any);
+          return;
+        }
 
         // Re-map to include first-seen source for each email
-        const withSource: { email: string; source: string }[] = [];
+        const withSource: { email: string; source: string; note?: string }[] = [];
         const seen = new Set<string>();
         for (const e of ranked) {
           if (seen.has(e)) continue;

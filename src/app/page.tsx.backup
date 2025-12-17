@@ -5,7 +5,6 @@ import { parseCompanyList } from "@/app/lib/parseCompanies";
 import type { Company, SendLog, CampaignBrief } from "@/types";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 /* =========================================================
    Page Shell (gradient bg + tabs)
@@ -14,11 +13,46 @@ import { useRouter } from "next/navigation";
 type Tab = "campaign" | "research" | "analytics";
 
 export default function HomePage() {
-  const router = useRouter();
-  useEffect(() => {
-    router.push("/campaign-brief");
-  }, [router]);
-  return null;
+  const [tab, setTab] = useState<Tab>("campaign");
+
+  return (
+    <main className="min-h-screen bg-gradient-to-br from-sky-50 via-indigo-50 to-fuchsia-50 dark:from-[#0b1020] dark:via-[#0b1628] dark:to-[#111126] text-slate-900 dark:text-slate-100 overflow-x-hidden w-full max-w-full">
+      <div className="mx-auto max-w-7xl px-1 sm:px-3 md:px-5 py-2 sm:py-4 md:py-10 w-full max-w-full box-border">
+        <header className="flex flex-col gap-3 sm:gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg sm:text-2xl md:text-3xl font-semibold tracking-tight break-words">SponsoPilot</h1>
+            <p className="mt-0.5 text-[10px] sm:text-xs md:text-sm text-slate-600 dark:text-slate-300/80 break-words">
+              Multi-recipient sponsorship outreach with personalization.
+            </p>
+          </div>
+
+          <nav className="mt-2 sm:mt-0 flex-shrink-0 w-full sm:w-auto">
+            <div className="inline-flex overflow-hidden rounded-xl border border-slate-200/60 bg-white/70 backdrop-blur dark:border-white/10 dark:bg-white/5 w-full sm:w-auto max-w-full">
+              <TabBtn active={tab === "campaign"} onClick={() => setTab("campaign")}>
+                Campaign
+              </TabBtn>
+              <TabBtn active={tab === "research"} onClick={() => setTab("research")}>
+                Research
+              </TabBtn>
+              <TabBtn active={tab === "analytics"} onClick={() => setTab("analytics")}>
+                Analytics
+              </TabBtn>
+            </div>
+          </nav>
+        </header>
+
+        <section className="mt-3 sm:mt-6 md:mt-8">
+          {tab === "campaign" ? (
+            <CampaignSender />
+          ) : tab === "research" ? (
+            <ResearchAssistant />
+          ) : (
+            <AnalyticsDashboard />
+          )}
+        </section>
+      </div>
+    </main>
+  );
 }
 
 function TabBtn({
@@ -65,7 +99,7 @@ type EditableRow = {
   source: string; // full URL page where found
 };
 
-export function ResearchAssistant() {
+function ResearchAssistant() {
   const [brief, setBrief] = useState<CampaignBrief | null>(null);
   const [query, setQuery] = useState("fitness brands in Singapore sponsorship email");
   const [domainPaste, setDomainPaste] = useState("hyroxsingapore.com");
@@ -578,10 +612,6 @@ Your Org`
     const { companies, errors } = parseCompanyList(raw);
     setCompanies(companies);
     setParseErrors(errors);
-    // Save companies to localStorage for reasoning page
-    try {
-      localStorage.setItem("sponso_companies", JSON.stringify(companies));
-    } catch {}
     if (errors.length) {
       toast.error("Some rows had issues", "Scroll up to 'Parse issues' for details.");
     } else {
@@ -913,7 +943,7 @@ ABC Inc., contact@abc.com, Technology, Interested in partnerships`}
    Reasoning Brainstorm
 ========================================================= */
 
-export function ReasoningBrainstorm({
+function ReasoningBrainstorm({
   companies,
   updateReasoning,
 }: {
@@ -1588,7 +1618,7 @@ function CampaignBriefDisplay({
    Analytics Dashboard
 ========================================================= */
 
-export function AnalyticsDashboard() {
+function AnalyticsDashboard() {
   const [logs, setLogs] = useState<SendLog[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
 

@@ -456,6 +456,43 @@ Your Org`
     }
   }, [logs]);
 
+  // Load reasoning from localStorage when companies change
+  useEffect(() => {
+    if (companies.length > 0 && typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("sponso_company_reasoning");
+        if (saved) {
+          const reasoningMap = JSON.parse(saved) as Record<string, string>;
+          setCompanies((prev) =>
+            prev.map((c) => ({
+              ...c,
+              reasoning: reasoningMap[c.email] || c.reasoning || "",
+            }))
+          );
+        }
+      } catch {
+        // Ignore errors
+      }
+    }
+  }, [companies.length]);
+
+  // Save reasoning to localStorage
+  useEffect(() => {
+    if (companies.length > 0 && typeof window !== "undefined") {
+      try {
+        const reasoningMap: Record<string, string> = {};
+        companies.forEach((c) => {
+          if (c.reasoning) {
+            reasoningMap[c.email] = c.reasoning;
+          }
+        });
+        localStorage.setItem("sponso_company_reasoning", JSON.stringify(reasoningMap));
+      } catch {
+        // Ignore errors
+      }
+    }
+  }, [companies]);
+
   const handleParse = useCallback(() => {
     const { companies, errors } = parseCompanyList(raw);
     setCompanies(companies);
@@ -473,6 +510,12 @@ Your Org`
     const { companies, errors } = parseCompanyList(text);
     setCompanies(companies);
     setParseErrors(errors);
+  }, []);
+
+  const updateCompanyReasoning = useCallback((email: string, reasoning: string) => {
+    setCompanies((prev) =>
+      prev.map((c) => (c.email === email ? { ...c, reasoning } : c))
+    );
   }, []);
 
   const canSend = useMemo(
@@ -553,9 +596,47 @@ Your Org`
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      {/* LEFT CARD - inputs */}
-      <div className="rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
+    <div className="space-y-6">
+      {/* Brainstorming Section - Full Width, Always Visible */}
+      {companies.length > 0 ? (
+        <ReasoningBrainstorm 
+          companies={companies} 
+          updateReasoning={updateCompanyReasoning}
+        />
+      ) : (
+        <div className="rounded-xl border border-indigo-200/60 bg-indigo-50/30 p-6 dark:border-indigo-800/30 dark:bg-indigo-950/20">
+          <div className="flex items-start gap-3">
+            <svg
+              className="h-6 w-6 text-indigo-600 dark:text-indigo-400 mt-0.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+              />
+            </svg>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-indigo-900 dark:text-indigo-100">
+                Brainstorm Sponsorship Reasoning
+              </h3>
+              <p className="mt-2 text-sm text-indigo-700/80 dark:text-indigo-300/80">
+                After you parse your company list, you'll see a dedicated brainstorming section here to help you think about why each company should sponsor and what makes them a good fit for your event or organization.
+              </p>
+              <p className="mt-2 text-xs text-indigo-600/70 dark:text-indigo-400/70">
+                💡 This will help you personalize your outreach and craft more compelling sponsorship pitches.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* LEFT CARD - inputs */}
+        <div className="rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
         <h2 className="text-lg font-semibold">Campaign</h2>
         <p className="mb-3 mt-1 text-sm text-slate-600 dark:text-slate-300/80">
           Paste CSV/TSV with headers: <code>name,email,industry,notes</code>
@@ -688,6 +769,181 @@ Your Org`
         </div>
 
         <LogsBlock logs={logs} downloadLogsCSV={downloadLogsCSV} clearLogs={() => setLogs([])} />
+      </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Reasoning Brainstorm
+========================================================= */
+
+function ReasoningBrainstorm({
+  companies,
+  updateReasoning,
+}: {
+  companies: Company[];
+  updateReasoning: (email: string, reasoning: string) => void;
+}) {
+  const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
+  const [expandAll, setExpandAll] = useState(false);
+
+  const companiesWithReasoning = companies.filter((c) => c.reasoning?.trim()).length;
+  const totalCompanies = companies.length;
+
+  const toggleExpandAll = () => {
+    if (expandAll) {
+      setExpandedCompany(null);
+    } else {
+      // Expand first company without reasoning, or first company if all have reasoning
+      const firstWithoutReasoning = companies.find((c) => !c.reasoning?.trim());
+      setExpandedCompany(firstWithoutReasoning?.email || companies[0]?.email || null);
+    }
+    setExpandAll(!expandAll);
+  };
+
+  const brainstormingPrompts = [
+    "What is their target audience and how does it align with yours?",
+    "Have they sponsored similar events or causes before?",
+    "What are their brand values and how do they match your mission?",
+    "What marketing benefits could they gain from sponsoring?",
+    "What's their geographic presence and does it align with your event?",
+    "What's their company size and budget capacity?",
+  ];
+
+  return (
+    <div className="mt-6 rounded-xl border border-indigo-200/60 bg-indigo-50/30 p-5 dark:border-indigo-800/30 dark:bg-indigo-950/20">
+      <div className="mb-4 flex items-start justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <svg
+              className="h-5 w-5 text-indigo-600 dark:text-indigo-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+              />
+            </svg>
+            <h3 className="text-lg font-semibold text-indigo-900 dark:text-indigo-100">
+              Brainstorm Sponsorship Reasoning
+            </h3>
+          </div>
+          <p className="mt-2 text-sm text-indigo-700/80 dark:text-indigo-300/80">
+            Think about why each company should sponsor and what makes them a good fit. This will help you personalize your outreach and craft more compelling pitches.
+          </p>
+          <div className="mt-3 flex items-center gap-4">
+            <div className="text-sm text-indigo-600 dark:text-indigo-400">
+              <span className="font-medium">{companiesWithReasoning}</span> of{" "}
+              <span className="font-medium">{totalCompanies}</span> companies have reasoning notes
+            </div>
+            {companiesWithReasoning < totalCompanies && (
+              <button
+                onClick={toggleExpandAll}
+                className="text-xs text-indigo-600 underline hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+              >
+                {expandAll ? "Collapse all" : "Start brainstorming"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-3 rounded-lg border border-indigo-200/60 bg-white/60 p-3 dark:border-indigo-800/30 dark:bg-white/5">
+        <p className="mb-2 text-xs font-medium text-indigo-900 dark:text-indigo-100">
+          💡 Consider these questions when brainstorming:
+        </p>
+        <ul className="grid grid-cols-1 gap-1.5 text-xs text-indigo-700 dark:text-indigo-300 sm:grid-cols-2">
+          {brainstormingPrompts.map((prompt, idx) => (
+            <li key={idx} className="flex items-start gap-1.5">
+              <span className="mt-0.5 text-indigo-500">•</span>
+              <span>{prompt}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="max-h-[500px] overflow-auto rounded-lg border border-indigo-200/60 bg-white/80 dark:border-indigo-800/30 dark:bg-white/5">
+        <div className="divide-y divide-indigo-100 dark:divide-indigo-900/30">
+          {companies.map((company, idx) => {
+            const isExpanded = expandedCompany === company.email;
+            const hasReasoning = !!company.reasoning?.trim();
+
+            return (
+              <div
+                key={idx}
+                className="bg-white/70 transition-colors hover:bg-white/90 dark:bg-white/5 dark:hover:bg-white/10"
+              >
+                <button
+                  onClick={() => setExpandedCompany(isExpanded ? null : company.email)}
+                  className="w-full p-4 text-left"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-slate-900 dark:text-white">
+                          {company.name}
+                        </div>
+                        {!hasReasoning && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+                            Needs reasoning
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                        {company.email} {company.industry && `• ${company.industry}`}
+                        {company.notes && ` • ${company.notes}`}
+                      </div>
+                    </div>
+                    <div className="ml-4 flex items-center gap-2">
+                      {hasReasoning && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200">
+                          ✓ Has notes
+                        </span>
+                      )}
+                      <svg
+                        className={`h-5 w-5 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div className="border-t border-indigo-100 p-4 dark:border-indigo-900/30">
+                    <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                      Why should <span className="font-semibold">{company.name}</span> sponsor? What makes them a good fit?
+                    </label>
+                    <textarea
+                      value={company.reasoning || ""}
+                      onChange={(e) => updateReasoning(company.email, e.target.value)}
+                      placeholder="Brainstorm ideas here... e.g., Their target audience aligns with our event demographics, they've sponsored similar events before, their brand values match our mission, they have a strong presence in our target market..."
+                      rows={6}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-0 placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200 dark:border-white/10 dark:bg-white/10 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-500/20"
+                    />
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      💡 Tip: Be specific about alignment points, past sponsorships, and mutual benefits. This reasoning can be used to personalize your outreach emails.
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

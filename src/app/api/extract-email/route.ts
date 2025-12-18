@@ -192,11 +192,11 @@ function deobfuscate(raw: string) {
   return s;
 }
 
-function extractEmailsFromHtml(html: string) {
-  const emails = new Set<string>();
-  const textOnly = html.replace(/<[^>]+>/g, " ");
-  const foundText = textOnly.match(EMAIL_REGEX);
-  if (foundText) foundText.forEach((e) => emails.add(e));
+  function extractEmailsFromHtml(html: string) {
+    const emails = new Set<string>();
+    const textOnly = html.replace(/<[^>]+>/g, " ");
+    const foundText = textOnly.match(EMAIL_REGEX);
+    if (foundText) foundText.forEach((e) => emails.add(e));
 
   // 1) mailto: links (highest priority)
   for (const m of html.matchAll(/mailto:([^"' >?&]+)/gi)) {
@@ -561,10 +561,20 @@ export async function POST(req: Request) {
         // Get the host for domain matching
         const host = new URL(finalOrigin).hostname;
 
-        const homepageEmails = extractEmailsFromHtml(html).map((e) => ({
-          email: e,
-          source: finalOrigin,
-        }));
+        const homepageRaw = extractEmailsFromHtml(html);
+
+        const homepageEmails =
+          homepageRaw.length === 0
+            ? [{ email: "N/A", source: finalOrigin }]
+            : homepageRaw.map((e) => {
+                const clean = String(e ?? "")
+                  .replace(/\u00A0/g, " ")
+                  .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                  .trim();
+
+                return { email: clean || "N/A", source: finalOrigin };
+              });
+
 
         // 2) try more likely subpages (increased to 12 for better coverage)
         const links = collectLikelyLinks(finalOrigin, html).slice(0, 12);
@@ -596,10 +606,20 @@ export async function POST(req: Request) {
             if (r.ok) {
               try {
                 const h = await r.text();
-                const found = extractEmailsFromHtml(h).map((e) => ({
-                  email: e,
-                  source: url,
-                }));
+                const foundRaw = extractEmailsFromHtml(h);
+
+                const found =
+                  foundRaw.length === 0
+                    ? [{ email: "N/A", source: url }]
+                    : foundRaw.map((e) => {
+                        const clean = String(e ?? "")
+                          .replace(/\u00A0/g, " ")
+                          .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                          .trim();
+
+                        return { email: clean || "N/A", source: url };
+                      });
+
                 subEmails.push(...found);
               } catch (textError) {
                 // Skip if we can't read the text
@@ -633,7 +653,7 @@ export async function POST(req: Request) {
         );
 
         const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
-
+        
         console.log(
           "[EMAIL EXTRACT]",
           origin,
@@ -646,22 +666,30 @@ export async function POST(req: Request) {
         // Filter + rank using final host (prioritize domain-matching emails)
         // host is already defined above at line 464
         const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
-        if (ranked.length === 0) {
+        let contacts: { email: string; source: string }[];
 
-          results.push({
-            domain: finalOrigin,
-            companyName,
-            contacts: [
-              {
-                email: "",
-                source: finalOrigin,
-                note: "no email mentioned",
-              },
-            ],
-          } as any);
-          return;
+        if (ranked.length === 0) {
+          // NO VALID EMAILS FOUND
+          contacts = [
+            {
+              email: "N/A",
+              source: finalOrigin,
+            },
+          ];
+        } else {
+          // VALID EMAILS FOUND
+          contacts = ranked.map((email) => ({
+            email,
+            source: finalOrigin,
+          }));
         }
 
+        results.push({
+          domain: finalOrigin,
+          companyName,
+          contacts,
+        });
+        
         // Re-map to include first-seen source for each email
         const withSource: { email: string; source: string; note?: string }[] = [];
         const seen = new Set<string>();

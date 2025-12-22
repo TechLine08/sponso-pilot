@@ -192,11 +192,11 @@ function deobfuscate(raw: string) {
   return s;
 }
 
-function extractEmailsFromHtml(html: string) {
-  const emails = new Set<string>();
-  const textOnly = html.replace(/<[^>]+>/g, " ");
-  const foundText = textOnly.match(EMAIL_REGEX);
-  if (foundText) foundText.forEach((e) => emails.add(e));
+  function extractEmailsFromHtml(html: string) {
+    const emails = new Set<string>();
+    const textOnly = html.replace(/<[^>]+>/g, " ");
+    const foundText = textOnly.match(EMAIL_REGEX);
+    if (foundText) foundText.forEach((e) => emails.add(e));
 
   // 1) mailto: links (highest priority)
   for (const m of html.matchAll(/mailto:([^"' >?&]+)/gi)) {
@@ -473,7 +473,9 @@ export async function POST(req: Request) {
 
     async function processOne(raw: string) {
       const origin = normaliseOrigin(raw);
+      
       if (!origin) {
+        
         results.push({ domain: raw, contacts: [] });
         return;
       }
@@ -561,10 +563,20 @@ export async function POST(req: Request) {
         // Get the host for domain matching
         const host = new URL(finalOrigin).hostname;
 
-        const homepageEmails = extractEmailsFromHtml(html).map((e) => ({
-          email: e,
-          source: finalOrigin,
-        }));
+        const homepageRaw = extractEmailsFromHtml(html);
+
+        const homepageEmails =
+          homepageRaw.length === 0
+            ? [{ email: "N/A", source: finalOrigin }]
+            : homepageRaw.map((e) => {
+                const clean = String(e ?? "")
+                  .replace(/\u00A0/g, " ")
+                  .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                  .trim();
+
+                return { email: clean || "N/A", source: finalOrigin };
+              });
+
 
         // 2) try more likely subpages (increased to 12 for better coverage)
         const links = collectLikelyLinks(finalOrigin, html).slice(0, 12);
@@ -596,10 +608,20 @@ export async function POST(req: Request) {
             if (r.ok) {
               try {
                 const h = await r.text();
-                const found = extractEmailsFromHtml(h).map((e) => ({
-                  email: e,
-                  source: url,
-                }));
+                const foundRaw = extractEmailsFromHtml(h);
+
+                const found =
+                  foundRaw.length === 0
+                    ? [{ email: "N/A", source: url }]
+                    : foundRaw.map((e) => {
+                        const clean = String(e ?? "")
+                          .replace(/\u00A0/g, " ")
+                          .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                          .trim();
+
+                        return { email: clean || "N/A", source: url };
+                      });
+
                 subEmails.push(...found);
               } catch (textError) {
                 // Skip if we can't read the text
@@ -632,52 +654,36 @@ export async function POST(req: Request) {
           rawEmails.slice(0, 20)
         );
 
-        const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
-
-        console.log(
-          "[EMAIL EXTRACT]",
-          origin,
-          "RANKED count:",
-          rankedDebug.length,
-          "RANKED:",
-          rankedDebug
+        const ranked = rankAndFilterEmails(
+          all.map((x) => x.email),
+          host,
+          strictDomainMatch
         );
 
-        // Filter + rank using final host (prioritize domain-matching emails)
-        // host is already defined above at line 464
-        const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
-        if (ranked.length === 0) {
-
-          results.push({
-            domain: finalOrigin,
-            companyName,
-            contacts: [
-              {
-                email: "",
-                source: finalOrigin,
-                note: "no email mentioned",
-              },
-            ],
-          } as any);
-          return;
-        }
-
-        // Re-map to include first-seen source for each email
-        const withSource: { email: string; source: string; note?: string }[] = [];
+        const contacts: { email: string; source: string }[] = [];
         const seen = new Set<string>();
-        for (const e of ranked) {
-          if (seen.has(e)) continue;
-          seen.add(e);
-          const src = all.find((x) => x.email === e)?.source ?? finalOrigin;
-          withSource.push({ email: e, source: src });
+
+        for (const email of ranked) {
+          if (seen.has(email)) continue;
+          seen.add(email);
+
+          const src = all.find((x) => x.email === email)?.source ?? finalOrigin;
+          contacts.push({ email, source: src });
         }
 
-        // Always include results, even if empty (so user knows the search completed)
+        if (contacts.length === 0) {
+          contacts.push({
+            email: "N/A",
+            source: finalOrigin,
+          });
+        }
+
         results.push({
           domain: finalOrigin,
           companyName,
-          contacts: withSource,
+          contacts,
         });
+
       } catch (err: any) {
         // Log error for debugging but don't fail the entire request
         console.error(`Error processing ${origin}:`, err?.message || err);

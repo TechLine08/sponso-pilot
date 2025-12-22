@@ -131,9 +131,25 @@ function ResearchAssistant() {
       (json.results as ExtractResult[]).forEach((r) => {
         const host = hostFrom(r.domain);
         const companyName = r.companyName || host;
+        
+        // Case if no contacts found
+        if (!r.contacts || r.contacts.length === 0) {
+          out.push({
+            id: `${host}::NA`,
+            selected: false,
+            name: companyName,
+            email: "N/A",
+            notes: "No public email found (manual research required)",
+            domain: host,
+            source: r.domain,
+          });
+          return;
+        }
+        
+        // Cases with contacts
         r.contacts.forEach((c, idx) => {
           out.push({
-            id: `${host}::${c.email}::${idx}`,
+            id: `${host}::${c.email}::${c.source}`,
             selected: true,
             name: companyName,
             email: c.email,
@@ -143,6 +159,19 @@ function ResearchAssistant() {
           });
         });
       });
+      
+      //  Duplicate rows to avoid React key collisions
+      const deduped = new Map<string, EditableRow>();
+
+      out.forEach((row) => {
+        const key = `${row.domain}::${row.email}::${row.source}`;
+        if (!deduped.has(key)) {
+          deduped.set(key, row);
+        }
+      });
+
+      setRows([...deduped.values()]);
+
       setRows(out);
       toast.success("Extraction complete", `${out.length} contact(s) found.`);
     } catch (e: any) {
@@ -323,7 +352,29 @@ function ResearchAssistant() {
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-white/10">
               {rows.map((r) => {
-                const emailValid = isValidEmail(r.email);
+                console.log("ROW RENDER:", { //Debugging for
+                  id: r.id,
+                  name: r.name,
+                  email_raw: r.email,
+                  email_json: JSON.stringify(r.email),
+                  notes: r.notes,
+                  source: r.source,
+                });
+                const emailRaw = String(r.email ?? "");
+                const emailTrim = emailRaw
+                  .replace(/\u00A0/g, " ") // nbsp
+                  .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width chars
+                  .trim();
+
+                const isNA =
+                  emailTrim === "" ||
+                  ["n/a", "na", "none", "null", "undefined"].includes(emailTrim.toLowerCase());
+
+                const displayEmail = isNA ? "N/A" : emailTrim;
+
+                // only validate if it's NOT N/A
+                const emailValid = isNA ? true : isValidEmail(emailTrim);
+
                 return (
                   <tr key={r.id} className="bg-white/70 hover:bg-white dark:bg-white/5 dark:hover:bg-white/10">
                     <td className="p-3 align-top">
@@ -333,29 +384,30 @@ function ResearchAssistant() {
                       <input
                         value={r.name}
                         onChange={(e) => updateRow(r.id, { name: e.target.value })}
-                        className="w-48 rounded-md border border-slate-200 bg-white px-2 py-1 dark:border-white/10 dark:bg-white/10"
                       />
+
                     </td>
                     <td className="p-3 align-top">
                       <input
-                        value={r.email}
-                        onChange={(e) => updateRow(r.id, { email: e.target.value })}
+                        value={displayEmail}
+                        readOnly={isNA}
+                        onChange={(e) => {
+                          if (isNA) return;
+                          updateRow(r.id, { email: e.target.value });
+                        }}
                         className={[
                           "w-60 rounded-md px-2 py-1",
-                          emailValid
+                          isNA
+                            ? "border border-slate-200 bg-slate-100/60 text-slate-500 dark:border-white/10 dark:bg-white/5"
+                            : emailValid
                             ? "border border-slate-200 bg-white dark:border-white/10 dark:bg-white/10"
                             : "border border-rose-500/80 bg-rose-50/60 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200",
                         ].join(" ")}
                       />
-                      {!emailValid && <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email</div>}
-                    </td>
-                    <td className="p-3 align-top">
-                      <input
-                        value={r.notes}
-                        onChange={(e) => updateRow(r.id, { notes: e.target.value })}
-                        placeholder="Optional note"
-                        className="w-64 rounded-md border border-slate-200 bg-white px-2 py-1 dark:border-white/10 dark:bg-white/10"
-                      />
+                      {!isNA && !emailValid && (
+                        <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email</div>
+                      )}
+
                     </td>
                     <td className="p-3 align-top text-xs text-slate-500">
                       {(() => {

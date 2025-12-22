@@ -150,6 +150,7 @@ function ResearchAssistant() {
           });
         });
       });
+      
       //  Duplicate rows to avoid React key collisions
       const deduped = new Map<string, EditableRow>();
 

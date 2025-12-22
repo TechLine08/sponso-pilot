@@ -473,7 +473,9 @@ export async function POST(req: Request) {
 
     async function processOne(raw: string) {
       const origin = normaliseOrigin(raw);
+      
       if (!origin) {
+        
         results.push({ domain: raw, contacts: [] });
         return;
       }
@@ -652,36 +654,28 @@ export async function POST(req: Request) {
           rawEmails.slice(0, 20)
         );
 
-        const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
-        
-        console.log(
-          "[EMAIL EXTRACT]",
-          origin,
-          "RANKED count:",
-          rankedDebug.length,
-          "RANKED:",
-          rankedDebug
+        const ranked = rankAndFilterEmails(
+          all.map((x) => x.email),
+          host,
+          strictDomainMatch
         );
 
-        // Filter + rank using final host (prioritize domain-matching emails)
-        // host is already defined above at line 464
-        const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
-        let contacts: { email: string; source: string }[];
+        const contacts: { email: string; source: string }[] = [];
+        const seen = new Set<string>();
 
-        if (ranked.length === 0) {
-          // NO VALID EMAILS FOUND
-          contacts = [
-            {
-              email: "N/A",
-              source: finalOrigin,
-            },
-          ];
-        } else {
-          // VALID EMAILS FOUND
-          contacts = ranked.map((email) => ({
-            email,
+        for (const email of ranked) {
+          if (seen.has(email)) continue;
+          seen.add(email);
+
+          const src = all.find((x) => x.email === email)?.source ?? finalOrigin;
+          contacts.push({ email, source: src });
+        }
+
+        if (contacts.length === 0) {
+          contacts.push({
+            email: "N/A",
             source: finalOrigin,
-          }));
+          });
         }
 
         results.push({
@@ -689,23 +683,7 @@ export async function POST(req: Request) {
           companyName,
           contacts,
         });
-        
-        // Re-map to include first-seen source for each email
-        const withSource: { email: string; source: string; note?: string }[] = [];
-        const seen = new Set<string>();
-        for (const e of ranked) {
-          if (seen.has(e)) continue;
-          seen.add(e);
-          const src = all.find((x) => x.email === e)?.source ?? finalOrigin;
-          withSource.push({ email: e, source: src });
-        }
 
-        // Always include results, even if empty (so user knows the search completed)
-        results.push({
-          domain: finalOrigin,
-          companyName,
-          contacts: withSource,
-        });
       } catch (err: any) {
         // Log error for debugging but don't fail the entire request
         console.error(`Error processing ${origin}:`, err?.message || err);

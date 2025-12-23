@@ -522,20 +522,36 @@ export async function POST(req: Request) {
         "FINAL URL:", res.url
       );
 
-      if (res.status === 403) {
-        results.push({
-          domain: origin,
-          companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "forbidden" }],
-        } as any);
-        return;
-      }
+      const statusToNote = (status: number) => {
+        if (status >= 200 && status < 300) return "ok";
+        if (status === 301 || status === 302 || status === 307 || status === 308) return "redirected";
+        if (status === 400) return "bad_request";
+        if (status === 401) return "unauthorized";
+        if (status === 403) return "forbidden";
+        if (status === 404) return "not_found";
+        if (status === 408) return "timeout";
+        if (status === 409) return "conflict";
+        if (status === 410) return "gone";
+        if (status === 418) return "blocked";
+        if (status === 429) return "rate_limited";
+        if (status >= 400 && status < 500) return "client_error";
+        if (status >= 500) return "server_error";
+        return "unknown_error";
+      };
+
+      console.log(
+        "[EMAIL EXTRACT]",
+        "URL:", origin,
+        "STATUS:", res.status,
+        "FINAL URL:", res.url
+      );
+
 
       if (!res.ok) {
         results.push({
           domain: origin,
           companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "unreachable" }],
+          contacts: [{ email: "", source: origin, note: statusToNote(res.status) }],
         } as any);
         return;
       }

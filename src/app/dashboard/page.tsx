@@ -77,7 +77,7 @@ function TabBtn({
 type ExtractResult = {
   domain: string; // final origin after redirects
   companyName?: string;
-  contacts: { email: string; source: string }[];
+  contacts: { email: string; source: string; note?: string }[];
 };
 
 type EditableRow = {
@@ -396,7 +396,7 @@ function ResearchAssistant() {
                         ].join(" ")}
                       />
                       {!isNA && !emailValid && (
-                        <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email</div>
+                        <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email test</div>
                       )}
 
                     </td>
@@ -842,6 +842,10 @@ function escapeCSV(val: string) {
 // simple but robust enough for UI validation
 function isValidEmail(s: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+}
+function isNAEmail(s: string) {
+  const t = (s || "").trim().toLowerCase();
+  return t === "" || t === "n/a" || t === "na" || t === "none";
 }
 
 function hostFrom(originOrUrl: string) {

@@ -116,6 +116,21 @@ const THIRD_PARTY_DOMAINS = [
   "jotform.com",
   "123formbuilder.com",
 ];
+function pickWorseStatus(a?: number, b?: number) {
+  if (!a) return b;
+  if (!b) return a;
+
+  const score = (s: number) => {
+    if (s >= 500) return 5;
+    if (s === 429) return 4;
+    if (s === 403 || s === 401) return 3;
+    if (s >= 400) return 2;
+    if (s >= 300) return 1;
+    return 0; // 2xx
+  };
+
+  return score(b) > score(a) ? b : a;
+}
 
 function makeBrowserHeaders(origin: string) {
   return {
@@ -440,6 +455,23 @@ async function searchLinkedIn(companyName: string, domain: string) {
   
   return emails;
 }
+function makeStatusContact(source: string,note: string,status?: number,labelOverride?: string) {
+  return {
+    email: labelOverride ?? (status ? statusLabel(status) : "N/A"),
+    source,
+    note,
+  };
+}
+
+function statusLabel(status: number) {
+  if (status === 403) return "FORBIDDEN";
+  if (status === 401) return "UNAUTHORIZED";
+  if (status === 404) return "NOT FOUND";
+  if (status === 429) return "RATE LIMITED";
+  if (status >= 500) return `SERVER ERROR (${status})`;
+  if (status >= 400) return `HTTP ERROR (${status})`;
+  return "N/A";
+}
 
 export async function POST(req: Request) {
   try {
@@ -465,7 +497,7 @@ export async function POST(req: Request) {
     const results: Array<{
       domain: string; // final origin after redirects
       companyName?: string;
-      contacts: { email: string; source: string }[];
+      contacts: { email: string; source: string; note?: string }[]; 
     }> = [];
 
     const queue = [...domains];
@@ -480,6 +512,14 @@ export async function POST(req: Request) {
         return;
       }
 
+      let bestStatus: number | undefined = undefined;
+      let bestStatusUrl: string | undefined = undefined;
+
+      const rememberStatus = (status: number, url: string) => {
+        bestStatus = pickWorseStatus(bestStatus, status);
+        if (!bestStatusUrl) bestStatusUrl = url;
+      };
+
       try {
         // 1) fetch homepage
       const controller = new AbortController();
@@ -493,14 +533,21 @@ export async function POST(req: Request) {
           redirect: "follow",
           signal: controller.signal,
         });
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
 
+        console.log("[EMAIL EXTRACT][HTTP STATUS]", {
+          url: origin,
+          finalUrl: res.url,
+          status: res.status,
+          ok: res.ok,
+        });
+        rememberStatus(res.status, res.url);
+
+      } catch (fetchError: any) {
         if (fetchError?.name === "AbortError") {
           results.push({
             domain: origin,
             companyName: undefined,
-            contacts: [{ email: "", source: origin, note: "timeout" }],
+            contacts: [makeStatusContact(origin, "manual/timeout", undefined, "TIMEOUT")],
           } as any);
           return;
         }
@@ -508,9 +555,10 @@ export async function POST(req: Request) {
         results.push({
           domain: origin,
           companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "unreachable" }],
+          contacts: [makeStatusContact(origin, "manual/unreachable", undefined, "UNREACHABLE")],
         } as any);
         return;
+
       } finally {
         clearTimeout(timeoutId);
       }
@@ -551,7 +599,9 @@ export async function POST(req: Request) {
         results.push({
           domain: origin,
           companyName: undefined,
-          contacts: [{ email: "", source: origin, note: statusToNote(res.status) }],
+          contacts: [
+            makeStatusContact(origin, `manual/http-${res.status}`, res.status),
+          ],
         } as any);
         return;
       }
@@ -566,8 +616,6 @@ export async function POST(req: Request) {
         html.includes("@")
       );
 
-
-        // Record final origin after redirects (important for brand/host logic)
         let finalOrigin = origin;
         try {
           finalOrigin = new URL(res.url).origin;
@@ -581,18 +629,14 @@ export async function POST(req: Request) {
 
         const homepageRaw = extractEmailsFromHtml(html);
 
-        const homepageEmails =
-          homepageRaw.length === 0
-            ? [{ email: "N/A", source: finalOrigin }]
-            : homepageRaw.map((e) => {
-                const clean = String(e ?? "")
-                  .replace(/\u00A0/g, " ")
-                  .replace(/[\u200B-\u200D\uFEFF]/g, "")
-                  .trim();
+        const homepageEmails = homepageRaw.map((e) => {
+          const clean = String(e ?? "")
+            .replace(/\u00A0/g, " ")
+            .replace(/[\u200B-\u200D\uFEFF]/g, "")
+            .trim();
 
-                return { email: clean || "N/A", source: finalOrigin };
-              });
-
+          return { email: clean, source: finalOrigin };
+        });
 
         // 2) try more likely subpages (increased to 12 for better coverage)
         const links = collectLikelyLinks(finalOrigin, html).slice(0, 12);
@@ -611,7 +655,17 @@ export async function POST(req: Request) {
                     redirect: "follow",
                     signal: subController.signal,
                   });
+              console.log("[EMAIL EXTRACT][HTTP STATUS][SUBPAGE]", {
+                url,
+                finalUrl: r.url,
+                status: r.status,
+                ok: r.ok,
+              });
+              rememberStatus(r.status, r.url);
 
+                if (r.status === 403 || r.status === 404) {
+                  continue; // skip forbidden/not found pages
+                }
               clearTimeout(subTimeoutId);
             } catch (fetchError: any) {
               clearTimeout(subTimeoutId);
@@ -626,19 +680,17 @@ export async function POST(req: Request) {
                 const h = await r.text();
                 const foundRaw = extractEmailsFromHtml(h);
 
-                const found =
-                  foundRaw.length === 0
-                    ? [{ email: "N/A", source: url }]
-                    : foundRaw.map((e) => {
-                        const clean = String(e ?? "")
-                          .replace(/\u00A0/g, " ")
-                          .replace(/[\u200B-\u200D\uFEFF]/g, "")
-                          .trim();
+                const found = foundRaw.map((e) => {
+                  const clean = String(e ?? "")
+                    .replace(/\u00A0/g, " ")
+                    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                    .trim();
 
-                        return { email: clean || "N/A", source: url };
-                      });
+                  return { email: clean, source: url };
+                });
 
                 subEmails.push(...found);
+
               } catch (textError) {
                 // Skip if we can't read the text
                 continue;
@@ -688,10 +740,19 @@ export async function POST(req: Request) {
         }
 
         if (contacts.length === 0) {
-          contacts.push({
-            email: "N/A",
-            source: finalOrigin,
-          });
+          if (bestStatus && bestStatus >= 400) {
+            contacts.push(
+              makeStatusContact(
+                finalOrigin,
+                `manual/http-${bestStatus}${bestStatusUrl ? ` (${bestStatusUrl})` : ""}`,
+                bestStatus
+              )
+            );
+          } else {
+            contacts.push(
+              makeStatusContact(finalOrigin, "no email found", undefined, "NO EMAIL FOUND")
+            );
+          }
         }
 
         results.push({

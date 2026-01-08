@@ -116,6 +116,21 @@ const THIRD_PARTY_DOMAINS = [
   "jotform.com",
   "123formbuilder.com",
 ];
+function pickWorseStatus(a?: number, b?: number) {
+  if (!a) return b;
+  if (!b) return a;
+
+  const score = (s: number) => {
+    if (s >= 500) return 5;
+    if (s === 429) return 4;
+    if (s === 403 || s === 401) return 3;
+    if (s >= 400) return 2;
+    if (s >= 300) return 1;
+    return 0; // 2xx
+  };
+
+  return score(b) > score(a) ? b : a;
+}
 
 function makeBrowserHeaders(origin: string) {
   return {
@@ -192,11 +207,11 @@ function deobfuscate(raw: string) {
   return s;
 }
 
-function extractEmailsFromHtml(html: string) {
-  const emails = new Set<string>();
-  const textOnly = html.replace(/<[^>]+>/g, " ");
-  const foundText = textOnly.match(EMAIL_REGEX);
-  if (foundText) foundText.forEach((e) => emails.add(e));
+  function extractEmailsFromHtml(html: string) {
+    const emails = new Set<string>();
+    const textOnly = html.replace(/<[^>]+>/g, " ");
+    const foundText = textOnly.match(EMAIL_REGEX);
+    if (foundText) foundText.forEach((e) => emails.add(e));
 
   // 1) mailto: links (highest priority)
   for (const m of html.matchAll(/mailto:([^"' >?&]+)/gi)) {
@@ -440,6 +455,23 @@ async function searchLinkedIn(companyName: string, domain: string) {
   
   return emails;
 }
+function makeStatusContact(source: string,note: string,status?: number,labelOverride?: string) {
+  return {
+    email: labelOverride ?? (status ? statusLabel(status) : "N/A"),
+    source,
+    note,
+  };
+}
+
+function statusLabel(status: number) {
+  if (status === 403) return "FORBIDDEN";
+  if (status === 401) return "UNAUTHORIZED";
+  if (status === 404) return "NOT FOUND";
+  if (status === 429) return "RATE LIMITED";
+  if (status >= 500) return `SERVER ERROR (${status})`;
+  if (status >= 400) return `HTTP ERROR (${status})`;
+  return "N/A";
+}
 
 export async function POST(req: Request) {
   try {
@@ -465,7 +497,7 @@ export async function POST(req: Request) {
     const results: Array<{
       domain: string; // final origin after redirects
       companyName?: string;
-      contacts: { email: string; source: string }[];
+      contacts: { email: string; source: string; note?: string }[]; 
     }> = [];
 
     const queue = [...domains];
@@ -473,10 +505,20 @@ export async function POST(req: Request) {
 
     async function processOne(raw: string) {
       const origin = normaliseOrigin(raw);
+      
       if (!origin) {
+        
         results.push({ domain: raw, contacts: [] });
         return;
       }
+
+      let bestStatus: number | undefined = undefined;
+      let bestStatusUrl: string | undefined = undefined;
+
+      const rememberStatus = (status: number, url: string) => {
+        bestStatus = pickWorseStatus(bestStatus, status);
+        if (!bestStatusUrl) bestStatusUrl = url;
+      };
 
       try {
         // 1) fetch homepage
@@ -491,14 +533,21 @@ export async function POST(req: Request) {
           redirect: "follow",
           signal: controller.signal,
         });
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
 
+        console.log("[EMAIL EXTRACT][HTTP STATUS]", {
+          url: origin,
+          finalUrl: res.url,
+          status: res.status,
+          ok: res.ok,
+        });
+        rememberStatus(res.status, res.url);
+
+      } catch (fetchError: any) {
         if (fetchError?.name === "AbortError") {
           results.push({
             domain: origin,
             companyName: undefined,
-            contacts: [{ email: "", source: origin, note: "timeout" }],
+            contacts: [makeStatusContact(origin, "manual/timeout", undefined, "TIMEOUT")],
           } as any);
           return;
         }
@@ -506,9 +555,10 @@ export async function POST(req: Request) {
         results.push({
           domain: origin,
           companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "unreachable" }],
+          contacts: [makeStatusContact(origin, "manual/unreachable", undefined, "UNREACHABLE")],
         } as any);
         return;
+
       } finally {
         clearTimeout(timeoutId);
       }
@@ -520,20 +570,38 @@ export async function POST(req: Request) {
         "FINAL URL:", res.url
       );
 
-      if (res.status === 403) {
-        results.push({
-          domain: origin,
-          companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "forbidden" }],
-        } as any);
-        return;
-      }
+      const statusToNote = (status: number) => {
+        if (status >= 200 && status < 300) return "ok";
+        if (status === 301 || status === 302 || status === 307 || status === 308) return "redirected";
+        if (status === 400) return "bad_request";
+        if (status === 401) return "unauthorized";
+        if (status === 403) return "forbidden";
+        if (status === 404) return "not_found";
+        if (status === 408) return "timeout";
+        if (status === 409) return "conflict";
+        if (status === 410) return "gone";
+        if (status === 418) return "blocked";
+        if (status === 429) return "rate_limited";
+        if (status >= 400 && status < 500) return "client_error";
+        if (status >= 500) return "server_error";
+        return "unknown_error";
+      };
+
+      console.log(
+        "[EMAIL EXTRACT]",
+        "URL:", origin,
+        "STATUS:", res.status,
+        "FINAL URL:", res.url
+      );
+
 
       if (!res.ok) {
         results.push({
           domain: origin,
           companyName: undefined,
-          contacts: [{ email: "", source: origin, note: "unreachable" }],
+          contacts: [
+            makeStatusContact(origin, `manual/http-${res.status}`, res.status),
+          ],
         } as any);
         return;
       }
@@ -548,8 +616,6 @@ export async function POST(req: Request) {
         html.includes("@")
       );
 
-
-        // Record final origin after redirects (important for brand/host logic)
         let finalOrigin = origin;
         try {
           finalOrigin = new URL(res.url).origin;
@@ -561,10 +627,16 @@ export async function POST(req: Request) {
         // Get the host for domain matching
         const host = new URL(finalOrigin).hostname;
 
-        const homepageEmails = extractEmailsFromHtml(html).map((e) => ({
-          email: e,
-          source: finalOrigin,
-        }));
+        const homepageRaw = extractEmailsFromHtml(html);
+
+        const homepageEmails = homepageRaw.map((e) => {
+          const clean = String(e ?? "")
+            .replace(/\u00A0/g, " ")
+            .replace(/[\u200B-\u200D\uFEFF]/g, "")
+            .trim();
+
+          return { email: clean, source: finalOrigin };
+        });
 
         // 2) try more likely subpages (increased to 12 for better coverage)
         const links = collectLikelyLinks(finalOrigin, html).slice(0, 12);
@@ -583,7 +655,17 @@ export async function POST(req: Request) {
                     redirect: "follow",
                     signal: subController.signal,
                   });
+              console.log("[EMAIL EXTRACT][HTTP STATUS][SUBPAGE]", {
+                url,
+                finalUrl: r.url,
+                status: r.status,
+                ok: r.ok,
+              });
+              rememberStatus(r.status, r.url);
 
+                if (r.status === 403 || r.status === 404) {
+                  continue; // skip forbidden/not found pages
+                }
               clearTimeout(subTimeoutId);
             } catch (fetchError: any) {
               clearTimeout(subTimeoutId);
@@ -596,11 +678,19 @@ export async function POST(req: Request) {
             if (r.ok) {
               try {
                 const h = await r.text();
-                const found = extractEmailsFromHtml(h).map((e) => ({
-                  email: e,
-                  source: url,
-                }));
+                const foundRaw = extractEmailsFromHtml(h);
+
+                const found = foundRaw.map((e) => {
+                  const clean = String(e ?? "")
+                    .replace(/\u00A0/g, " ")
+                    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+                    .trim();
+
+                  return { email: clean, source: url };
+                });
+
                 subEmails.push(...found);
+
               } catch (textError) {
                 // Skip if we can't read the text
                 continue;
@@ -632,52 +722,45 @@ export async function POST(req: Request) {
           rawEmails.slice(0, 20)
         );
 
-        const rankedDebug = rankAndFilterEmails(rawEmails, host, strictDomainMatch);
-
-        console.log(
-          "[EMAIL EXTRACT]",
-          origin,
-          "RANKED count:",
-          rankedDebug.length,
-          "RANKED:",
-          rankedDebug
+        const ranked = rankAndFilterEmails(
+          all.map((x) => x.email),
+          host,
+          strictDomainMatch
         );
 
-        // Filter + rank using final host (prioritize domain-matching emails)
-        // host is already defined above at line 464
-        const ranked = rankAndFilterEmails(all.map((x) => x.email), host, strictDomainMatch);
-        if (ranked.length === 0) {
-
-          results.push({
-            domain: finalOrigin,
-            companyName,
-            contacts: [
-              {
-                email: "",
-                source: finalOrigin,
-                note: "no email mentioned",
-              },
-            ],
-          } as any);
-          return;
-        }
-
-        // Re-map to include first-seen source for each email
-        const withSource: { email: string; source: string; note?: string }[] = [];
+        const contacts: { email: string; source: string }[] = [];
         const seen = new Set<string>();
-        for (const e of ranked) {
-          if (seen.has(e)) continue;
-          seen.add(e);
-          const src = all.find((x) => x.email === e)?.source ?? finalOrigin;
-          withSource.push({ email: e, source: src });
+
+        for (const email of ranked) {
+          if (seen.has(email)) continue;
+          seen.add(email);
+
+          const src = all.find((x) => x.email === email)?.source ?? finalOrigin;
+          contacts.push({ email, source: src });
         }
 
-        // Always include results, even if empty (so user knows the search completed)
+        if (contacts.length === 0) {
+          if (bestStatus && bestStatus >= 400) {
+            contacts.push(
+              makeStatusContact(
+                finalOrigin,
+                `manual/http-${bestStatus}${bestStatusUrl ? ` (${bestStatusUrl})` : ""}`,
+                bestStatus
+              )
+            );
+          } else {
+            contacts.push(
+              makeStatusContact(finalOrigin, "no email found", undefined, "NO EMAIL FOUND")
+            );
+          }
+        }
+
         results.push({
           domain: finalOrigin,
           companyName,
-          contacts: withSource,
+          contacts,
         });
+
       } catch (err: any) {
         // Log error for debugging but don't fail the entire request
         console.error(`Error processing ${origin}:`, err?.message || err);

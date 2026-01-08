@@ -394,7 +394,7 @@ export function ResearchAssistant() {
                             : "border border-rose-500/80 bg-rose-50/60 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200",
                         ].join(" ")}
                       />
-                      {!emailValid && <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email</div>}
+                      {!emailValid && <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">Invalid email Test</div>}
                     </td>
                     <td className="p-2 sm:p-3 align-top">
                       <input
